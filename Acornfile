@@ -1,0 +1,116 @@
+
+localData: {
+  defaultDbHost: "db:3306/app?charset=utf8mb4&parseTime=True&loc=Local"
+  defaultDbUser: "secret://db-user-creds/username"
+  defaultDbPass: "secret://db-user-creds/password"
+  dbUrlEnvTemplate: "DB_URL=mysql://${DB_USER}:${DB_PASS}@${DB_HOST}"
+}
+
+args: {
+  // Override the default generated DB username
+  dbUser: localData.defaultDbUser
+  // Override the default generate DB password
+  dbPass: localData.defaultDbPass
+  // Override the inferred DB host. Note, if override this a DB container will not get created.
+  dbHost: localData.defaultDbHost
+  // Enable Prisma Studio. It is highly recommend to leave this off in production.
+  withPrismaStudio: false
+}
+
+containers: {
+  app: {
+    build: context: "."
+
+    dependsOn: "migrate"
+
+    dirs: "./prisma": "./prisma"
+    files: "/app/.env": localData.dbUrlEnvTemplate
+    env: {
+      DB_USER: args.dbUser
+      DB_PASS: args.dbPass
+      DB_HOST: args.dbHost
+    }
+
+    // Setup hot-reloading if running in development mode
+    if args.dev {
+      build: {
+        context: "."
+        target: "builder"
+      }
+      dirs: {
+        "./prisma": "./prisma"
+        "./public": "./public"
+        "./src": "./src"
+        "./styles": "./styles"
+        "./package.json": "./package.json"
+      }
+      cmd: ["npm", "run", "dev"]
+    }
+    ports: publish: "3000/http"
+  }
+
+  // If we're using a non-inferred DB host, don't create a DB container.
+  if args.dbHost == localData.defaultDbHost {
+    db: {
+      image: "mysql"
+      ports: 3306
+      env: {
+        MYSQL_DATABASE: "app"
+        MYSQL_USER: args.dbUser
+        MYSQL_PASSWORD: args.dbPass
+        MYSQL_ROOT_PASSWORD: "secret://db-root-password/token"
+      }
+    }
+  }
+
+  if args.withPrismaStudio || args.dev {
+    studio: {
+      image: "node:18"
+      dependsOn: "migrate"
+
+      dirs: "./prisma": "./prisma"
+      files: "./.env": localData.dbUrlEnvTemplate
+      env: {
+        DB_USER: args.dbUser
+        DB_PASS: args.dbPass
+        DB_HOST: args.dbHost
+      }
+
+      ports: publish: "5555/http"
+      cmd: ["npx", "prisma", "studio"]
+    }
+  }
+}
+
+jobs: {
+  migrate: {
+    image: "node:18"
+
+    // If we're using a non-inferred DB host, don't depend on the DB container
+    if args.dbHost == localData.defaultDbHost {
+      dependsOn: "db"
+    }
+    
+    dirs: "./prisma": "./prisma"
+    files: "./.env": localData.dbUrlEnvTemplate
+    env: {
+      DB_USER: args.dbUser
+      DB_PASS: args.dbPass
+      DB_HOST: args.dbHost
+    }
+
+    cmd: ["npx", "prisma", "db", "push"]
+  }
+}
+
+secrets: {
+  // If we have a non-default option set for both the username and password then don't generate a secret.
+  if args.dbUser == localData.defaultDbUser || args.dbPass == localData.defaultDbPass {
+    "db-user-creds": {
+        type: "basic"
+    }
+  } 
+  "db-root-password": {
+      type: "token"
+  }
+}
